@@ -80,6 +80,37 @@ def load_zimage_pipeline(device="mps", use_full_model=False):
     return pipe
 
 
+def load_qwen_image_2_1_pipeline(device="mps"):
+    """Load Qwen-Image-2.1: unified text-to-image + editing, full bf16 weights."""
+    from diffusers import QwenImage21Pipeline
+
+    print(f"Loading Qwen-Image-2.1 on {device}...")
+    print_memory("Before loading")
+
+    dtype = torch.bfloat16 if device in ("mps", "cuda") else torch.float32
+    pipe = QwenImage21Pipeline.from_pretrained(
+        "Qwen/Qwen-Image-2.1",
+        torch_dtype=dtype,
+        low_cpu_mem_usage=True,
+    )
+    print_memory("After loading")
+
+    pipe.to(device)
+    print_memory("After pipe.to(device)")
+
+    pipe.enable_attention_slicing()
+    if hasattr(pipe, "enable_vae_slicing"):
+        pipe.enable_vae_slicing()
+    if hasattr(pipe, "enable_vae_tiling"):
+        pipe.enable_vae_tiling()
+    elif hasattr(getattr(pipe, "vae", None), "enable_tiling"):
+        pipe.vae.enable_tiling()
+    print_memory("After memory optimizations")
+
+    print("  Qwen-Image-2.1 ready!")
+    return pipe
+
+
 def load_flux2_klein_pipeline(device="mps"):
     """Load FLUX.2-klein-4B with int8 quantized transformer and text encoder."""
     from diffusers import Flux2KleinPipeline

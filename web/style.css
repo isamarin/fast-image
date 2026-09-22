@@ -186,7 +186,7 @@ button { font: inherit; }
   top: 64px;
   right: 18px;
   bottom: 170px;
-  width: 64px;
+  width: 320px;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -199,8 +199,8 @@ button { font: inherit; }
 
 .rail button {
   flex: 0 0 auto;
-  width: 64px;
-  height: 64px;
+  width: 320px;
+  height: 320px;
   padding: 0;
   border: 2px solid transparent;
   border-radius: 10px;
@@ -527,6 +527,15 @@ input:focus-visible, button:focus-visible, textarea:focus-visible, .chip:focus-v
   z-index: var(--z-drawer);
 }
 
+.drawer-left {
+  right: auto; left: 0;
+  border-left: none;
+  border-right: 1px solid var(--line);
+}
+
+.storage-list li.prompt-item { cursor: pointer; }
+.storage-list .p-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 .drawer-head { display: flex; justify-content: space-between; align-items: center; }
 .drawer-head h2 { font-size: 15px; margin: 0; text-wrap: balance; }
 .drawer-sub { color: var(--dim); font-size: 13px; }
@@ -557,6 +566,20 @@ input:focus-visible, button:focus-visible, textarea:focus-visible, .chip:focus-v
 
 .storage-list .icon-link { border: 1px solid var(--line); border-radius: 8px; padding: 4px 9px; }
 .storage-list .danger { color: var(--error); border-color: var(--error); }
+
+/* ---------------- build footer ---------------- */
+
+.build-footer {
+  position: fixed;
+  left: 12px;
+  bottom: calc(8px + env(safe-area-inset-bottom));
+  margin: 0;
+  font-size: 10px;
+  color: var(--dim);
+  opacity: 0.5;
+  pointer-events: none;
+  z-index: 1;
+}
 
 /* small screens: tuck the rail under the stage */
 @media (max-width: 720px) {

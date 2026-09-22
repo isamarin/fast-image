@@ -44,6 +44,7 @@ from loaders import (
     load_flux2_klein_sdnq_pipeline,
     load_flux2_klein_9b_sdnq_pipeline,
     load_flux2_klein_uncensored_pipeline,
+    load_qwen_image_2_1_pipeline,
 )
 
 try:
@@ -235,6 +236,20 @@ _register(
     progress="steps",
     note="Full-precision Z-Image (~24GB). Slower; use when you need LoRA support (path to a local .safetensors).",
 )
+_register(
+    "qwen-image-2-1",
+    label="Qwen-Image-2.1",
+    tag="Editing",
+    defaults={"width": 1024, "height": 1024, "steps": 40, "guidance": 1.0},
+    img2img=True,
+    lora=False,
+    progress="steps",
+    note=(
+        "Unified text-to-image + editing, full bf16 weights (~14GB), up to 6 reference "
+        "images here. Not a turbo model (40 steps by default), so much slower than the "
+        "Turbo/Fast lanes above. Guidance above 1.0 enables true CFG."
+    ),
+)
 
 
 def mflux_hs_available():
@@ -280,6 +295,7 @@ MODEL_DOWNLOADS = {
     "zimage-quant": [("Disty0/Z-Image-Turbo-SDNQ-uint4-svd-r32", None, "model_index.json")],
     "zimage-full": [("Tongyi-MAI/Z-Image-Turbo", None, "model_index.json")],
     "bonsai": [("prism-ml/bonsai-image-ternary-4B-mlx-2bit", None, None)],
+    "qwen-image-2-1": [("Qwen/Qwen-Image-2.1", None, "model_index.json")],
     # anima is intentionally absent: its GGUF lives outside the HF cache and the
     # Metal runner fetches it on first generation.
 }
@@ -549,6 +565,8 @@ def _get_pipe(model_id, device):
         _pipe = load_zimage_pipeline(device, use_full_model=True)
     elif model_id == "bonsai":
         _pipe = load_bonsai_pipeline()
+    elif model_id == "qwen-image-2-1":
+        _pipe = load_qwen_image_2_1_pipeline(device)
     else:
         raise ValueError(f"unknown in-process model: {model_id}")
 
@@ -641,9 +659,21 @@ def _job_dir(job_id):
     return d
 
 
+def _exif_bytes(prompt, model_id):
+    exif = Image.Exif()
+    exif[0x0110] = model_id or ""  # Model
+    ts = datetime.now().strftime("%Y:%m:%d %H:%M:%S")
+    exif[0x0132] = ts  # DateTime
+    exif[0x9003] = ts  # DateTimeOriginal
+    # UserComment needs the UNICODE prefix + UTF-16LE to survive non-ASCII prompts (EXIF's
+    # ASCII-typed fields mangle Cyrillic etc.) — see EXIF 2.3 spec for the character-code header.
+    exif[0x9286] = b"UNICODE\x00" + (prompt or "").encode("utf-16-le")  # UserComment
+    return exif.tobytes()
+
+
 def _save_result(job, idx, image, seed, auto_save, output_dir, prompt):
     path = os.path.join(_job_dir(job["id"]), f"{idx}.png")
-    image.save(path, "PNG")
+    image.save(path, "PNG", exif=_exif_bytes(prompt, job["params"].get("model")))
     entry = {"url": f"/api/files/{job['id']}/{idx}.png", "seed": seed, "file": path}
     if auto_save:
         out_dir = os.path.expanduser(output_dir or DEFAULT_OUTPUT_DIR)
@@ -739,6 +769,8 @@ def _run_diffusers_loop(job, model_id, p, pipe, input_images, width, height,
         )
         if input_images:
             kwargs["image"] = input_images if len(input_images) > 1 else input_images[0]
+        if model_id == "qwen-image-2-1":
+            kwargs["true_cfg_scale"] = kwargs.pop("guidance_scale")
         if use_callback:
             def _cb(pipeline, step, timestep, cb_kwargs, _i=i):
                 job["progress"] = (_i + (step + 1) / steps) / count

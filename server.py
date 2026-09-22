@@ -11,16 +11,21 @@ engine.py; this file is just the HTTP surface.
 
 import os
 import subprocess
+from datetime import datetime
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 import engine
 
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
+
+# CalVer, pinned once per process: changes on every server restart, which
+# busts the browser cache for index.html's ?v= asset links (see below).
+APP_VERSION = datetime.now().strftime("%Y.%m.%d.%H%M%S")
 
 app = FastAPI(title="Ultra Fast Image Gen", docs_url=None, redoc_url=None)
 
@@ -176,7 +181,14 @@ def open_folder(req: FolderRequest):
     return {"opened": folder}
 
 
-# Static frontend last so /api keeps precedence.
+@app.get("/", response_class=HTMLResponse)
+def index():
+    with open(os.path.join(WEB_DIR, "index.html"), encoding="utf-8") as f:
+        html = f.read()
+    return html.replace("{{VERSION}}", APP_VERSION)
+
+
+# Static frontend last so /api and / keep precedence.
 app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
 
 

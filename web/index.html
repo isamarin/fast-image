@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Ultra Fast Image Gen</title>
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v={{VERSION}}">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>&#9889;</text></svg>">
 </head>
 <body>
@@ -13,6 +13,7 @@
   <div class="wordmark">Ultra&nbsp;Fast <span>Image Gen</span></div>
   <div class="topbar-right">
     <span id="device-chip" class="device tab-nums"></span>
+    <button id="prompts-toggle" class="icon-link" type="button">Prompts</button>
     <button id="storage-toggle" class="icon-link" type="button">Storage</button>
   </div>
 </header>
@@ -164,6 +165,16 @@
   </div>
 </section>
 
+<!-- ======================= Saved prompts drawer ======================= -->
+<aside id="prompts-drawer" class="drawer drawer-left" hidden aria-label="Saved prompts">
+  <div class="drawer-head">
+    <h2>Saved prompts</h2>
+    <button id="prompts-close" class="icon-link" type="button" aria-label="Close saved prompts panel">&#10005;</button>
+  </div>
+  <p class="drawer-sub">&#8984;S saves the current prompt here.</p>
+  <ul id="prompts-list" class="storage-list"></ul>
+</aside>
+
 <!-- ======================= Storage drawer ======================= -->
 <aside id="storage-drawer" class="drawer" hidden aria-label="Storage management">
   <div class="drawer-head">
@@ -175,6 +186,8 @@
   <p id="storage-msg" class="drawer-sub" role="status"></p>
 </aside>
 
-<script src="app.js"></script>
+<footer class="build-footer">v{{VERSION}}</footer>
+
+<script src="app.js?v={{VERSION}}"></script>
 </body>
 </html>

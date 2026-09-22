@@ -26,6 +26,8 @@ const els = {
   deviceChip: $("device-chip"), storageToggle: $("storage-toggle"), storageDrawer: $("storage-drawer"),
   storageClose: $("storage-close"), storageList: $("storage-list"),
   storageTotal: $("storage-total"), storageMsg: $("storage-msg"),
+  promptsToggle: $("prompts-toggle"), promptsDrawer: $("prompts-drawer"),
+  promptsClose: $("prompts-close"), promptsList: $("prompts-list"),
 };
 
 let MODELS = [];
@@ -38,6 +40,8 @@ let activeJob = null;
 let animaPreset = "Balanced";
 
 const SETTINGS_KEY = "ufig-settings-v2";
+const SAVED_PROMPTS_KEY = "ufig-saved-prompts-v1";
+const SAVED_PROMPTS_MAX = 200;
 const POPS = [
   ["chipModel", "popModel"], ["chipSize", "popSize"], ["chipTune", "popTune"],
   ["chipBatch", "popBatch"], ["chipMore", "popMore"],
@@ -79,6 +83,70 @@ function saveSettings() {
 function loadSettings() {
   try { return JSON.parse(localStorage.getItem(SETTINGS_KEY)) || null; }
   catch { return null; }
+}
+
+/* ---------------- saved prompts ---------------- */
+
+function loadSavedPrompts() {
+  try { return JSON.parse(localStorage.getItem(SAVED_PROMPTS_KEY)) || []; }
+  catch { return []; }
+}
+
+function writeSavedPrompts(list) {
+  localStorage.setItem(SAVED_PROMPTS_KEY, JSON.stringify(list.slice(0, SAVED_PROMPTS_MAX)));
+}
+
+function saveCurrentPrompt() {
+  const text = els.prompt.value.trim();
+  if (!text) return;
+  const list = loadSavedPrompts().filter((p) => p.text !== text);
+  list.unshift({ id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, text, savedAt: Date.now() });
+  writeSavedPrompts(list);
+  renderSavedPrompts();
+}
+
+function deleteSavedPrompt(id) {
+  writeSavedPrompts(loadSavedPrompts().filter((p) => p.id !== id));
+  renderSavedPrompts();
+}
+
+function renderSavedPrompts() {
+  const list = loadSavedPrompts();
+  els.promptsList.textContent = "";
+  for (const p of list) {
+    const li = document.createElement("li");
+    li.className = "prompt-item";
+    const text = document.createElement("span");
+    text.className = "p-text";
+    text.title = p.text;
+    text.textContent = p.text;
+    li.appendChild(text);
+    const del = document.createElement("button");
+    del.className = "icon-link";
+    del.type = "button";
+    del.textContent = "Delete";
+    let armed = false;
+    del.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (!armed) {
+        armed = true;
+        del.textContent = "Confirm?";
+        del.classList.add("danger");
+        setTimeout(() => { armed = false; del.textContent = "Delete"; del.classList.remove("danger"); }, 3000);
+        return;
+      }
+      deleteSavedPrompt(p.id);
+    });
+    li.appendChild(del);
+    li.addEventListener("click", () => {
+      els.prompt.value = p.text;
+      autoGrow();
+      saveSettings();
+      els.promptsDrawer.hidden = true;
+      startGeneration();
+    });
+    els.promptsList.appendChild(li);
+  }
 }
 
 /* ---------------- popovers ---------------- */
@@ -594,7 +662,12 @@ async function init() {
     if (!e.target.closest(".pop") && !e.target.closest(".chip")) closePops();
   });
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") { closePops(); els.storageDrawer.hidden = true; }
+    if (e.key === "Escape") { closePops(); els.storageDrawer.hidden = true; els.promptsDrawer.hidden = true; }
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
+      e.preventDefault();
+      saveCurrentPrompt();
+      els.promptsDrawer.hidden = false;
+    }
   });
 
   for (const el of [els.steps, els.guidance, els.count, els.loraStrength, els.width, els.height, els.seed]) {
@@ -695,6 +768,12 @@ async function init() {
     if (!els.storageDrawer.hidden) refreshStorage().catch((e) => { els.storageMsg.textContent = e.message; });
   });
   els.storageClose.addEventListener("click", () => { els.storageDrawer.hidden = true; });
+
+  els.promptsToggle.addEventListener("click", () => {
+    els.promptsDrawer.hidden = !els.promptsDrawer.hidden;
+    if (!els.promptsDrawer.hidden) renderSavedPrompts();
+  });
+  els.promptsClose.addEventListener("click", () => { els.promptsDrawer.hidden = true; });
 }
 
 init().catch((e) => showError(`Failed to load: ${e.message}`));
