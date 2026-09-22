@@ -28,6 +28,18 @@ const els = {
   storageTotal: $("storage-total"), storageMsg: $("storage-msg"),
   promptsToggle: $("prompts-toggle"), promptsDrawer: $("prompts-drawer"),
   promptsClose: $("prompts-close"), promptsList: $("prompts-list"),
+  loraToggle: $("lora-toggle"), loraStudio: $("lora-studio"), loraClose: $("lora-close"),
+  loraViewList: $("lora-view-list"), loraDatasetList: $("lora-dataset-list"),
+  loraNewDataset: $("lora-new-dataset"), loraFileInput: $("lora-file-input"),
+  loraViewCaption: $("lora-view-caption"), loraCaptionGrid: $("lora-caption-grid"),
+  loraRecaption: $("lora-recaption"), loraSaveCaptions: $("lora-save-captions"),
+  loraToTrain: $("lora-to-train"),
+  loraViewTrain: $("lora-view-train"), loraTrigger: $("lora-trigger"),
+  loraSteps: $("lora-steps"), loraStepsOut: $("lora-steps-out"), loraEtaHint: $("lora-eta-hint"),
+  loraStartTrain: $("lora-start-train"),
+  loraViewProgress: $("lora-view-progress"), loraProgressStage: $("lora-progress-stage"),
+  loraProgressDetail: $("lora-progress-detail"), loraProgressBar: $("lora-progress-bar"),
+  loraViewDone: $("lora-view-done"), loraUse: $("lora-use"), loraError: $("lora-error"),
 };
 
 let MODELS = [];
@@ -530,6 +542,245 @@ async function pollJob(jobId) {
   }
 }
 
+/* ---------------- LoRA Studio ---------------- */
+
+// Measured on this session's hardware (Z-Image-Turbo, bf16, rank 16, res 512,
+// batch 1 + grad-accum 4) — a rough ETA hint only, not a guarantee.
+const LORA_SEC_PER_STEP = 83;
+
+let loraDatasetId = null;
+let loraImages = [];
+let loraCaptions = {};
+let loraPollTimer = null;
+let loraTrainedPath = null;
+
+function loraShowView(name) {
+  for (const v of document.querySelectorAll(".lora-view")) v.hidden = true;
+  els[`loraView${name[0].toUpperCase()}${name.slice(1)}`].hidden = false;
+}
+
+function loraShowError(msg) {
+  els.loraError.textContent = msg;
+  els.loraError.hidden = !msg;
+}
+
+async function loraOpen() {
+  els.loraStudio.hidden = false;
+  loraShowError("");
+  loraShowView("list");
+  await loraRefreshDatasetList().catch((e) => loraShowError(e.message));
+}
+
+function loraClose() {
+  els.loraStudio.hidden = true;
+  clearInterval(loraPollTimer);
+}
+
+async function loraRefreshDatasetList() {
+  const datasets = await api("/api/lora/datasets");
+  els.loraDatasetList.textContent = "";
+  for (const d of datasets) {
+    const li = document.createElement("li");
+    li.className = "dataset-item";
+    const name = document.createElement("span");
+    name.className = "s-name";
+    name.textContent = `${d.num_images} image${d.num_images === 1 ? "" : "s"}`;
+    const badge = document.createElement("span");
+    badge.className = "dataset-badge";
+    badge.textContent = d.trained ? "trained" : d.captioned ? "captioned" : "new";
+    const del = document.createElement("button");
+    del.className = "icon-link";
+    del.type = "button";
+    del.textContent = "Delete";
+    let armed = false;
+    del.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      if (!armed) {
+        armed = true;
+        del.textContent = "Confirm?";
+        del.classList.add("danger");
+        setTimeout(() => { armed = false; del.textContent = "Delete"; del.classList.remove("danger"); }, 3000);
+        return;
+      }
+      await api(`/api/lora/datasets/${d.id}`, { method: "DELETE" });
+      loraRefreshDatasetList();
+    });
+    li.append(name, badge, del);
+    li.addEventListener("click", () => loraOpenDataset(d));
+    els.loraDatasetList.appendChild(li);
+  }
+}
+
+async function loraOpenDataset(d) {
+  loraDatasetId = d.id;
+  loraImages = Array.from({ length: d.num_images }, (_, i) => null); // filled below
+  const imgsResp = await api(`/api/lora/datasets/${d.id}/captions`);
+  loraCaptions = imgsResp.captions || {};
+  // The API doesn't have a dedicated "list images" endpoint beyond upload's
+  // response, so recover the filenames from the captions keys when present;
+  // otherwise re-caption is the only way in (acceptable — it's the next step anyway).
+  loraImages = Object.keys(loraCaptions);
+  if (loraImages.length) {
+    loraRenderCaptionGrid();
+    loraShowView("caption");
+  } else {
+    loraStartCaptioning();
+  }
+}
+
+async function loraCreateDataset(files) {
+  const form = new FormData();
+  for (const f of files) form.append("files", f);
+  loraShowError("");
+  try {
+    const r = await api("/api/lora/datasets", { method: "POST", body: form });
+    loraDatasetId = r.dataset_id;
+    loraImages = r.images;
+    loraCaptions = {};
+    loraStartCaptioning();
+  } catch (e) {
+    loraShowError(e.message);
+  }
+}
+
+function loraPollJob(jobId, { onTick, onDone }) {
+  clearInterval(loraPollTimer);
+  loraPollTimer = setInterval(async () => {
+    let job;
+    try {
+      job = await api(`/api/jobs/${jobId}`);
+    } catch (e) {
+      clearInterval(loraPollTimer);
+      loraShowError(e.message);
+      return;
+    }
+    onTick(job);
+    if (["done", "error", "cancelled"].includes(job.status)) {
+      clearInterval(loraPollTimer);
+      if (job.status === "error") loraShowError(job.error || "Job failed.");
+      else onDone(job);
+    }
+  }, 1500);
+}
+
+async function loraStartCaptioning() {
+  loraShowView("progress");
+  els.loraProgressStage.textContent = "Captioning";
+  els.loraProgressDetail.textContent = "";
+  els.loraProgressBar.style.width = "0%";
+  let jobId;
+  try {
+    ({ job_id: jobId } = await api(`/api/lora/datasets/${loraDatasetId}/caption`, { method: "POST" }));
+  } catch (e) {
+    loraShowError(e.message);
+    return;
+  }
+  loraPollJob(jobId, {
+    onTick: (job) => {
+      els.loraProgressStage.textContent = job.stage || "Captioning";
+      els.loraProgressBar.style.width = `${Math.round((job.progress || 0) * 100)}%`;
+    },
+    onDone: (job) => {
+      loraCaptions = job.captions || {};
+      loraImages = Object.keys(loraCaptions);
+      loraRenderCaptionGrid();
+      loraShowView("caption");
+    },
+  });
+}
+
+function loraRenderCaptionGrid() {
+  els.loraCaptionGrid.textContent = "";
+  for (const name of loraImages) {
+    const card = document.createElement("div");
+    card.className = "lora-caption-card";
+    const img = document.createElement("img");
+    img.src = `/api/lora/datasets/${loraDatasetId}/images/${name}`;
+    img.alt = name;
+    const ta = document.createElement("textarea");
+    ta.value = loraCaptions[name] || "";
+    ta.addEventListener("input", () => { loraCaptions[name] = ta.value; });
+    card.append(img, ta);
+    els.loraCaptionGrid.appendChild(card);
+  }
+}
+
+async function loraSaveCaptions() {
+  await api(`/api/lora/datasets/${loraDatasetId}/captions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ captions: loraCaptions }),
+  });
+}
+
+function loraUpdateEtaHint() {
+  const steps = Number(els.loraSteps.value);
+  els.loraStepsOut.textContent = steps;
+  const secs = steps * LORA_SEC_PER_STEP;
+  const mins = Math.round(secs / 60);
+  const hrs = (secs / 3600).toFixed(1);
+  els.loraEtaHint.textContent = secs < 3600
+    ? `~${mins} min at the rate measured earlier this session — actual time varies.`
+    : `~${hrs} h at the rate measured earlier this session — actual time varies.`;
+}
+
+async function loraStartTraining() {
+  const trigger = els.loraTrigger.value.trim();
+  if (!trigger) { loraShowError("Trigger token is required."); return; }
+  loraShowError("");
+  try {
+    await loraSaveCaptions();
+  } catch (e) {
+    loraShowError(e.message);
+    return;
+  }
+  loraShowView("progress");
+  els.loraProgressStage.textContent = "Starting";
+  els.loraProgressDetail.textContent = "";
+  els.loraProgressBar.style.width = "0%";
+  let jobId;
+  try {
+    ({ job_id: jobId } = await api(`/api/lora/datasets/${loraDatasetId}/train`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ trigger, max_steps: Number(els.loraSteps.value) }),
+    }));
+  } catch (e) {
+    loraShowError(e.message);
+    return;
+  }
+  loraPollJob(jobId, {
+    onTick: (job) => {
+      els.loraProgressStage.textContent = job.stage || "Training";
+      const bits = [];
+      if (job.step != null && job.total_steps) bits.push(`step ${job.step}/${job.total_steps}`);
+      if (job.loss != null) bits.push(`loss ${job.loss.toFixed(3)}`);
+      if (job.eta) bits.push(`eta ${job.eta}`);
+      els.loraProgressDetail.textContent = bits.join(" · ");
+      els.loraProgressBar.style.width = `${Math.round((job.progress || 0) * 100)}%`;
+    },
+    onDone: (job) => {
+      loraTrainedPath = job.lora_path;
+      loraShowView("done");
+    },
+  });
+}
+
+function loraUseInStudio() {
+  const m = MODELS.find((x) => x.id === "zimage-full");
+  if (m) {
+    modelId = m.id;
+    applyModelDefaults(m);
+    renderModelList();
+    syncChips();
+  }
+  els.loraPath.value = loraTrainedPath || "";
+  els.loraStrength.value = 1;
+  saveSettings();
+  loraClose();
+  els.prompt.focus();
+}
+
 /* ---------------- rail / viewer ---------------- */
 
 const seenUrls = new Set();
@@ -662,7 +913,12 @@ async function init() {
     if (!e.target.closest(".pop") && !e.target.closest(".chip")) closePops();
   });
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") { closePops(); els.storageDrawer.hidden = true; els.promptsDrawer.hidden = true; }
+    if (e.key === "Escape") {
+      closePops();
+      els.storageDrawer.hidden = true;
+      els.promptsDrawer.hidden = true;
+      if (!els.loraStudio.hidden) loraClose();
+    }
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
       e.preventDefault();
       saveCurrentPrompt();
@@ -774,6 +1030,32 @@ async function init() {
     if (!els.promptsDrawer.hidden) renderSavedPrompts();
   });
   els.promptsClose.addEventListener("click", () => { els.promptsDrawer.hidden = true; });
+
+  els.loraToggle.addEventListener("click", () => loraOpen());
+  els.loraClose.addEventListener("click", () => loraClose());
+  els.loraNewDataset.addEventListener("click", () => els.loraFileInput.click());
+  els.loraFileInput.addEventListener("change", () => {
+    if (els.loraFileInput.files.length) loraCreateDataset(els.loraFileInput.files);
+    els.loraFileInput.value = "";
+  });
+  els.loraRecaption.addEventListener("click", () => loraStartCaptioning());
+  els.loraSaveCaptions.addEventListener("click", () =>
+    loraSaveCaptions().catch((e) => loraShowError(e.message))
+  );
+  els.loraToTrain.addEventListener("click", async () => {
+    try {
+      await loraSaveCaptions();
+    } catch (e) {
+      loraShowError(e.message);
+      return;
+    }
+    loraShowError("");
+    loraUpdateEtaHint();
+    loraShowView("train");
+  });
+  els.loraSteps.addEventListener("input", loraUpdateEtaHint);
+  els.loraStartTrain.addEventListener("click", () => loraStartTraining());
+  els.loraUse.addEventListener("click", () => loraUseInStudio());
 }
 
 init().catch((e) => showError(`Failed to load: ${e.message}`));

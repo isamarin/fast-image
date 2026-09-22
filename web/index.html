@@ -14,6 +14,7 @@
   <div class="topbar-right">
     <span id="device-chip" class="device tab-nums"></span>
     <button id="prompts-toggle" class="icon-link" type="button">Prompts</button>
+    <button id="lora-toggle" class="icon-link" type="button">LoRA Studio</button>
     <button id="storage-toggle" class="icon-link" type="button">Storage</button>
   </div>
 </header>
@@ -174,6 +175,67 @@
   <p class="drawer-sub">&#8984;S saves the current prompt here.</p>
   <ul id="prompts-list" class="storage-list"></ul>
 </aside>
+
+<!-- ======================= LoRA Studio ======================= -->
+<div id="lora-studio" class="lora-studio" hidden aria-label="LoRA Studio">
+  <div class="lora-head">
+    <h2>LoRA Studio <span class="lora-sub">Z-Image Turbo character LoRAs</span></h2>
+    <button id="lora-close" class="icon-link" type="button" aria-label="Close LoRA Studio">&#10005;</button>
+  </div>
+
+  <section id="lora-view-list" class="lora-view">
+    <p class="pop-hint">Pick an existing dataset, or start a new one from a folder of character reference images.</p>
+    <ul id="lora-dataset-list" class="storage-list"></ul>
+    <button id="lora-new-dataset" class="sample" type="button">+ New dataset</button>
+    <input id="lora-file-input" type="file" accept="image/*" multiple hidden>
+  </section>
+
+  <section id="lora-view-caption" class="lora-view" hidden>
+    <p class="pop-hint">
+      Review the captions before training — they should describe pose, framing, clothing,
+      setting and lighting only. Identity (face, hair) stays out; the trigger token you set
+      next carries that instead.
+    </p>
+    <div id="lora-caption-grid" class="lora-caption-grid"></div>
+    <div class="lora-actions">
+      <button id="lora-recaption" class="icon-link" type="button">Re-caption all</button>
+      <button id="lora-save-captions" class="icon-link" type="button">Save edits</button>
+      <button id="lora-to-train" class="go-text" type="button">Next: configure training &rarr;</button>
+    </div>
+  </section>
+
+  <section id="lora-view-train" class="lora-view" hidden>
+    <label class="row">
+      <span>Trigger token</span>
+      <input id="lora-trigger" type="text" placeholder="ohwxcharacter" spellcheck="false">
+    </label>
+    <p class="pop-hint">A rare word/token that names this character — used in prompts later to summon it.</p>
+    <label class="row">
+      <span>Steps <output id="lora-steps-out" class="tab-nums"></output></span>
+      <input id="lora-steps" type="range" min="20" max="1000" step="10" value="200">
+    </label>
+    <p id="lora-eta-hint" class="pop-hint tab-nums"></p>
+    <button id="lora-start-train" class="go-text" type="button">Start training</button>
+  </section>
+
+  <section id="lora-view-progress" class="lora-view" hidden>
+    <div class="busy-card lora-busy-card">
+      <div class="spinner" aria-hidden="true"></div>
+      <div>
+        <div id="lora-progress-stage" class="busy-stage"></div>
+        <div id="lora-progress-detail" class="busy-detail tab-nums"></div>
+      </div>
+    </div>
+    <div class="progress" aria-hidden="true"><div id="lora-progress-bar"></div></div>
+  </section>
+
+  <section id="lora-view-done" class="lora-view" hidden>
+    <p class="pop-hint">Training complete — the LoRA is ready to use.</p>
+    <button id="lora-use" class="go-text" type="button">Use in Studio</button>
+  </section>
+
+  <p id="lora-error" class="error" role="alert" hidden></p>
+</div>
 
 <!-- ======================= Storage drawer ======================= -->
 <aside id="storage-drawer" class="drawer" hidden aria-label="Storage management">

@@ -14,12 +14,13 @@ import subprocess
 from datetime import datetime
 
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 import engine
+import lora_training
 
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 
@@ -123,8 +124,9 @@ def job_status(job_id: str):
     elapsed = None
     if job["started"]:
         elapsed = (job["finished"] or __import__("time").time()) - job["started"]
-    return {
+    resp = {
         "id": job["id"],
+        "kind": job.get("kind", "generate"),
         "status": job["status"],
         "stage": job["stage"],
         "progress": job["progress"],
@@ -133,6 +135,10 @@ def job_status(job_id: str):
         "elapsed": elapsed,
         "queue_position": engine.queue_position(job_id),
     }
+    for k in ("captions", "step", "total_steps", "loss", "eta", "lora_path"):
+        if k in job:
+            resp[k] = job[k]
+    return resp
 
 
 @app.post("/api/jobs/{job_id}/cancel")
@@ -150,6 +156,81 @@ def job_file(job_id: str, name: str):
     if not os.path.isfile(path):
         raise HTTPException(404, "file not found")
     return FileResponse(path, media_type="image/png")
+
+
+# ---------------------------------------------------------------------------
+# LoRA dataset + training pipeline (Z-Image-Turbo only)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/lora/datasets")
+def lora_datasets():
+    return lora_training.list_datasets()
+
+
+@app.post("/api/lora/datasets")
+async def lora_dataset_create(files: list[UploadFile] = File(...)):
+    payload = [(f.filename, await f.read()) for f in files]
+    try:
+        dataset_id = lora_training.create_dataset(payload)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {"dataset_id": dataset_id, "images": lora_training.dataset_images(dataset_id)}
+
+
+@app.delete("/api/lora/datasets/{dataset_id}")
+def lora_dataset_delete(dataset_id: str):
+    lora_training.delete_dataset(dataset_id)
+    return {"deleted": True}
+
+
+@app.get("/api/lora/datasets/{dataset_id}/images/{name}")
+def lora_dataset_image(dataset_id: str, name: str):
+    if "/" in name or ".." in name or ".." in dataset_id or "/" in dataset_id:
+        raise HTTPException(400, "bad path")
+    path = os.path.join(lora_training.images_dir(dataset_id), name)
+    if not os.path.isfile(path):
+        raise HTTPException(404, "image not found")
+    return FileResponse(path)
+
+
+@app.get("/api/lora/datasets/{dataset_id}/captions")
+def lora_captions_get(dataset_id: str):
+    return {"captions": lora_training.get_captions(dataset_id) or {}}
+
+
+class CaptionsRequest(BaseModel):
+    captions: dict[str, str]
+
+
+@app.post("/api/lora/datasets/{dataset_id}/captions")
+def lora_captions_save(dataset_id: str, req: CaptionsRequest):
+    lora_training.save_captions(dataset_id, req.captions)
+    return {"saved": True}
+
+
+@app.post("/api/lora/datasets/{dataset_id}/caption")
+def lora_caption_start(dataset_id: str):
+    if not lora_training.dataset_images(dataset_id):
+        raise HTTPException(404, "dataset not found or empty")
+    job_id = engine.submit_job({"dataset_id": dataset_id}, kind="caption")
+    return {"job_id": job_id}
+
+
+class TrainRequest(BaseModel):
+    trigger: str = Field(min_length=1)
+    max_steps: int = Field(default=200, ge=1, le=5000)
+
+
+@app.post("/api/lora/datasets/{dataset_id}/train")
+def lora_train_start(dataset_id: str, req: TrainRequest):
+    if not lora_training.get_captions(dataset_id):
+        raise HTTPException(400, "caption the dataset before training")
+    job_id = engine.submit_job(
+        {"dataset_id": dataset_id, "trigger": req.trigger, "max_steps": req.max_steps},
+        kind="train",
+    )
+    return {"job_id": job_id}
 
 
 @app.get("/api/storage")

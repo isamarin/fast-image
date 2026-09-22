@@ -603,11 +603,18 @@ _lock = threading.Lock()
 _wake = threading.Event()
 
 
-def submit_job(params):
-    """Queue a generation job; returns the job id."""
+def submit_job(params, kind="generate"):
+    """Queue a job (generate/caption/train); returns the job id.
+
+    All kinds share this one worker/queue so a long-running caption or
+    training run can never execute on the MPS device at the same time as an
+    image generation — they'd otherwise starve each other (observed firsthand:
+    a concurrent generation stalled an unrelated model download to a crawl).
+    """
     job_id = uuid.uuid4().hex[:12]
     job = {
         "id": job_id,
+        "kind": kind,
         "status": "queued",
         "created": time.time(),
         "started": None,
@@ -615,7 +622,7 @@ def submit_job(params):
         "params": params,
         "progress": None,      # 0..1 float, or None for indeterminate
         "stage": "Queued",
-        "images": [],          # [{url, seed, file}]
+        "images": [],          # [{url, seed, file}] — "generate" jobs only
         "error": None,
     }
     with _lock:
@@ -916,20 +923,33 @@ def _worker():
             job = _jobs[job_id]
             job["status"] = "running"
             job["started"] = time.time()
-            model_id = job["params"].get("model")
+            kind = job.get("kind", "generate")
             try:
-                if model_id not in MODELS:
-                    raise ValueError(f"unknown model: {model_id}")
-                if MODEL_DOWNLOADS.get(model_id) and not model_downloaded(model_id):
-                    _download_for_job(job, model_id)
-                if model_id == "mflux-hs-2k":
-                    _run_mflux_hs(job, job["params"])
-                elif model_id == "anima":
-                    _run_anima(job, job["params"])
-                elif model_id == "bonsai":
-                    _run_bonsai(job, job["params"])
+                if kind == "caption":
+                    import lora_training
+
+                    _free_pipe()  # captioner and the cached generation pipe won't both fit
+                    lora_training.run_captioning(job, job["params"]["dataset_id"])
+                elif kind == "train":
+                    import lora_training
+
+                    _free_pipe()
+                    p = job["params"]
+                    lora_training.run_training(job, p["dataset_id"], p["trigger"], p["max_steps"])
                 else:
-                    _run_diffusers(job, model_id, job["params"])
+                    model_id = job["params"].get("model")
+                    if model_id not in MODELS:
+                        raise ValueError(f"unknown model: {model_id}")
+                    if MODEL_DOWNLOADS.get(model_id) and not model_downloaded(model_id):
+                        _download_for_job(job, model_id)
+                    if model_id == "mflux-hs-2k":
+                        _run_mflux_hs(job, job["params"])
+                    elif model_id == "anima":
+                        _run_anima(job, job["params"])
+                    elif model_id == "bonsai":
+                        _run_bonsai(job, job["params"])
+                    else:
+                        _run_diffusers(job, model_id, job["params"])
                 job["status"] = "done"
                 job["stage"] = "Done"
                 job["progress"] = 1.0
